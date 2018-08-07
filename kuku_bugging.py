@@ -19,7 +19,7 @@ OVERWRITE_FLAG = True   #文件名冲突是否覆盖
 RETRY_COUNT = 10   # 重试次数
 RETRY_TIME_WAIT=1 #重试等待时间
 
-GET_INFO_TYPE = "INFO" # INFO ： 更新资源最新页号    IMG  ：下载资源
+GET_INFO_TYPE = "IMG" # INFO ： 更新资源最新页号    IMG  ：下载资源
 
 PAGE_MIN = 0  #页面编号 最小值
 PAGE_MAX = 0  #页面编号 最大值
@@ -89,7 +89,7 @@ def getComicInfo():
     dict_to_json_write_file()      
                         
 # 获取资源地址
-def getComic(html, get_info_type):
+def getComic(html,):
     soup = BeautifulSoup(html.text,'lxml')
     cDds = soup.find_all('dd')
         
@@ -100,10 +100,12 @@ def getComic(html, get_info_type):
         cU = int(cHref.split("/")[-2])
         if cU > PAGE_MIN and cU <= PAGE_MAX :
             print(cTitle)
+            idx = 0
             dirName = makeDir(cTitle)
             while True :
 #                 print(cHref)
-                nextFlag,cHref = getImg(cHref,dirName)
+                idx += 1 
+                nextFlag,cHref = getImg(cHref,dirName,cU,idx)
                 if not nextFlag:
                     make_archive(cTitle)            
                     COMIC_LIST[DOWN_COMIC]["page_min"] = cU
@@ -113,7 +115,7 @@ def getComic(html, get_info_type):
 # 下载文件                    
 def makeFile(imgurl,fileName):
     if not OVERWRITE_FLAG and os.path.isfile(fileName):
-            fileName = fileName[:-4]+"_n."+fileName.split(".")[-1]  #重名图片 加后缀 _n
+        fileName = fileName[:-4]+"_n."+fileName.split(".")[-1]  #重名图片 加后缀 _n
     imgurl=urllib.parse.quote(imgurl,safe='/:?=.') # 中文字符转换
     print("imgurl : " +imgurl + " ====> fileName :  " + fileName)
     err_cnt = 0
@@ -130,8 +132,82 @@ def makeFile(imgurl,fileName):
                 print("[ERROR] DOWNLOAD <" +imgurl+"> FAIL!")                    
                 print(e)
 
+# 流式下载文件
+def makeFileStream(imgurl,fileName):
+    requests.packages.urllib3.disable_warnings()
+    if not OVERWRITE_FLAG and os.path.isfile(fileName):
+        fileName = fileName[:-4]+"_n."+fileName.split(".")[-1]  #重名图片 加后缀 _n
+    imgurl=urllib.parse.quote(imgurl,safe='/:?=.') # 中文字符转换
+    print("imgurl : " +imgurl + " ====> fileName :  " + fileName)
+    err_cnt = 0
+    while True and err_cnt < RETRY_COUNT:
+        try :
+            file_size = -1 #文件总大小
+            requests.packages.urllib3.disable_warnings()
+            while True:
+                lsize = get_local_file_exists_size(fileName)
+                r1 = requests.get(imgurl, stream=True, verify=False)
+                file_size = int(r1.headers['Content-Length'])
+                print("lsize : %s ,  file_size : %s ",lsize,file_size)
+                if lsize == file_size:
+                    break
+                webPage = get_file_obj(imgurl, lsize)
+                try:
+                    file_obj = open(fileName, 'ab+')
+                except Exception as e:
+                    print ("打开文件: %s 失败", fileName )
+                    break
+                try:
+                    for chunk in webPage.iter_content(chunk_size=10 *1024):
+                        if chunk:
+                            lsize = get_local_file_exists_size(fileName)
+                            file_obj.write(chunk)
+                        else:
+                            break
+                except Exception as e:
+                    time.sleep(RETRY_TIME_WAIT)
+                file_obj.close()
+                webPage.close()
+    
+            break            
+        except Exception as e :
+            if err_cnt <= RETRY_COUNT : 
+                err_cnt += 1
+                print("[RETRY] DOWNLOAD <" +imgurl+"> FAIL! RETRY NOW  " +str(err_cnt)+" . ")        
+                time.sleep(RETRY_TIME_WAIT)
+            else :
+                print("[ERROR] DOWNLOAD <" +imgurl+"> FAIL!")                    
+                print(e)
+
+# 获取当前文件大小
+def get_local_file_exists_size(local_path):
+    try:
+        lsize = os.stat(local_path).st_size
+    except:
+        lsize = 0
+    return lsize
+ 
+# 流式下载文件 
+def get_file_obj(down_link, offset):
+    webPage = None
+    try:
+        headers = {'Range': 'bytes=%d-' % offset}
+        # print(headers)
+        webPage = requests.get(down_link, stream=True, headers=headers, timeout=120, verify=False)
+        status_code = webPage.status_code
+        if status_code in [200, 206]:
+            webPage = webPage
+        elif status_code == 416:
+            print("文件数据请求区间错误 : %s , status_code : %s ",down_link, status_code)
+        else:
+            print("链接有误: %s ，status_code ：%s", down_link, status_code)
+    except Exception as e:
+        print("无法链接 ：%s , exception : %s",down_link, e)
+    finally:
+        return webPage
+
 # 获取图片地址
-def getImg(cHref,dirName):
+def getImg(cHref,dirName,cU,idx):
     html = getHtml(cHref)
     nextFlag = True #是否有下一页
     # 正则获取图片地址
@@ -143,8 +219,11 @@ def getImg(cHref,dirName):
     imgurl = imgurl.split("+")[-1][1:]  #针对动态JS拼接的URL 做处理
     # 下载图片
     imgurl = P_SERVER+imgurl  #截取变量部分替换为 图片服务器地址
-    fileName = os.path.join(dirName,imgurl.split("/")[-1])
+    fileName = DOWN_COMIC+"_"+str(cU)+"_"+("%03d" % idx)+".jpg"
+    fileName = os.path.join(dirName,fileName)
+    # fileName = os.path.join(dirName,imgurl.split("/")[-1])
     makeFile(imgurl,fileName)
+    # makeFileStream(imgurl,fileName)
     #是否有下一页判断
     soup = BeautifulSoup(html.text,'lxml')
     aObj = soup.find('img',attrs={"src":"/images/d.gif"}).parent
