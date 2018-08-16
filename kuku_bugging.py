@@ -8,7 +8,7 @@ import os
 import shutil
 import time
 import json
-
+import logging
 
 
 D_PATH = os.path.join(os.path.abspath("."),"img")   #本地保存目录
@@ -23,8 +23,17 @@ GET_INFO_TYPE = "IMG" # INFO ： 更新资源最新页号    IMG  ：下载资�
 
 PAGE_MIN = 0  #页面编号 最小值
 PAGE_MAX = 0  #页面编号 最大值
-DOWN_COMIC = "HUNTER"
+DOWN_COMIC = "HZW"  #下载资源TAG
 COMIC_LIST = {}
+
+logger = logging.getLogger(__name__)
+logger.setLevel(level = logging.INFO)
+handler = logging.FileHandler("log_kuku_bugging.log")
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+console = logging.StreamHandler()
+logger.addHandler(handler)
+logger.addHandler(console)
 
 """
 {"HZW": {"url": "http://comic2.kukudm.com/comiclist/4/index.htm", "page_min": 0, "page_max": 64716,"desc":"海贼王"}, 
@@ -40,12 +49,25 @@ COMIC_LIST = {}
 def getHtml(targetUrl):
     user_agent = 'Mozilla/4.0 (compatible; MSIE 5.5; Windows NT)'
     headers = {'User-Agent': user_agent}
-    response = requests.get(targetUrl)
+    err_cnt = 0
+    while True and err_cnt < RETRY_COUNT:
+        try :
+            response = requests.get(targetUrl)   
+            break            
+        except Exception as e :
+            if err_cnt <= RETRY_COUNT : 
+                err_cnt += 1
+                logger.info("[RETRY] REQUEST GET <" +targetUrl+"> FAIL! RETRY NOW  " +str(err_cnt)+" . ")        
+                time.sleep(RETRY_TIME_WAIT)
+            else :
+                logger.info("[ERROR] REQUEST GET <" +targetUrl+"> FAIL!")                    
+                logger.info(e)    
+        
 #     if response.status_code == 200:
-#         print("HTML SUCCESS")
+#         logger.info("HTML SUCCESS")
 #     else:
-#         print("HTML ERROR")
-#         print(response)
+#         logger.info("HTML ERROR")
+#         logger.info(response)
     response.encoding='gbk'  
     html = response
     return html
@@ -75,7 +97,7 @@ def makeDir(fileName):
 def getComicInfo():
     for comic_name in COMIC_LIST:
         comic_info = COMIC_LIST[comic_name]
-        print(comic_info)
+        logger.info(comic_info)
         targetUrl = comic_info["url"]
         html = getHtml(targetUrl)
 
@@ -92,18 +114,17 @@ def getComicInfo():
 def getComic(html,):
     soup = BeautifulSoup(html.text,'lxml')
     cDds = soup.find_all('dd')
-        
     for cDd in cDds:
         tmp = cDd.contents[2]
-        cTitle = cDd.contents[0].text
+        cTitle = cDd.contents[0].text.replace(":","")
         cHref = tmp["href"]
         cU = int(cHref.split("/")[-2])
         if cU > PAGE_MIN and cU <= PAGE_MAX :
-            print(cTitle)
+            logger.info(cTitle)
             idx = 0
             dirName = makeDir(cTitle)
             while True :
-#                 print(cHref)
+#                 logger.info(cHref)
                 idx += 1 
                 nextFlag,cHref = getImg(cHref,dirName,cU,idx)
                 if not nextFlag:
@@ -117,7 +138,7 @@ def makeFile(imgurl,fileName):
     if not OVERWRITE_FLAG and os.path.isfile(fileName):
         fileName = fileName[:-4]+"_n."+fileName.split(".")[-1]  #重名图片 加后缀 _n
     imgurl=urllib.parse.quote(imgurl,safe='/:?=.') # 中文字符转换
-    print("imgurl : " +imgurl + " ====> fileName :  " + fileName)
+    logger.info("imgurl : " +imgurl + " ====> fileName :  " + fileName)
     err_cnt = 0
     while True and err_cnt < RETRY_COUNT:
         try :
@@ -126,11 +147,11 @@ def makeFile(imgurl,fileName):
         except Exception as e :
             if err_cnt <= RETRY_COUNT : 
                 err_cnt += 1
-                print("[RETRY] DOWNLOAD <" +imgurl+"> FAIL! RETRY NOW  " +str(err_cnt)+" . ")        
+                logger.info("[RETRY] DOWNLOAD <" +imgurl+"> FAIL! RETRY NOW  " +str(err_cnt)+" . ")        
                 time.sleep(RETRY_TIME_WAIT)
             else :
-                print("[ERROR] DOWNLOAD <" +imgurl+"> FAIL!")                    
-                print(e)
+                logger.info("[ERROR] DOWNLOAD <" +imgurl+"> FAIL!")                    
+                logger.info(e)
 
 # 流式下载文件
 def makeFileStream(imgurl,fileName):
@@ -138,7 +159,7 @@ def makeFileStream(imgurl,fileName):
     if not OVERWRITE_FLAG and os.path.isfile(fileName):
         fileName = fileName[:-4]+"_n."+fileName.split(".")[-1]  #重名图片 加后缀 _n
     imgurl=urllib.parse.quote(imgurl,safe='/:?=.') # 中文字符转换
-    print("imgurl : " +imgurl + " ====> fileName :  " + fileName)
+    logger.info("imgurl : " +imgurl + " ====> fileName :  " + fileName)
     err_cnt = 0
     while True and err_cnt < RETRY_COUNT:
         try :
@@ -148,14 +169,14 @@ def makeFileStream(imgurl,fileName):
                 lsize = get_local_file_exists_size(fileName)
                 r1 = requests.get(imgurl, stream=True, verify=False)
                 file_size = int(r1.headers['Content-Length'])
-                print("lsize : %s ,  file_size : %s ",lsize,file_size)
+                logger.info("lsize : %s ,  file_size : %s ",lsize,file_size)
                 if lsize == file_size:
                     break
                 webPage = get_file_obj(imgurl, lsize)
                 try:
                     file_obj = open(fileName, 'ab+')
                 except Exception as e:
-                    print ("打开文件: %s 失败", fileName )
+                    logger.info("打开文件: %s 失败", fileName )
                     break
                 try:
                     for chunk in webPage.iter_content(chunk_size=10 *1024):
@@ -173,11 +194,11 @@ def makeFileStream(imgurl,fileName):
         except Exception as e :
             if err_cnt <= RETRY_COUNT : 
                 err_cnt += 1
-                print("[RETRY] DOWNLOAD <" +imgurl+"> FAIL! RETRY NOW  " +str(err_cnt)+" . ")        
+                logger.info("[RETRY] DOWNLOAD <" +imgurl+"> FAIL! RETRY NOW  " +str(err_cnt)+" . ")        
                 time.sleep(RETRY_TIME_WAIT)
             else :
-                print("[ERROR] DOWNLOAD <" +imgurl+"> FAIL!")                    
-                print(e)
+                logger.info("[ERROR] DOWNLOAD <" +imgurl+"> FAIL!")                    
+                logger.info(e)
 
 # 获取当前文件大小
 def get_local_file_exists_size(local_path):
@@ -192,17 +213,17 @@ def get_file_obj(down_link, offset):
     webPage = None
     try:
         headers = {'Range': 'bytes=%d-' % offset}
-        # print(headers)
+        # logger.info(headers)
         webPage = requests.get(down_link, stream=True, headers=headers, timeout=120, verify=False)
         status_code = webPage.status_code
         if status_code in [200, 206]:
             webPage = webPage
         elif status_code == 416:
-            print("文件数据请求区间错误 : %s , status_code : %s ",down_link, status_code)
+            logger.info("文件数据请求区间错误 : %s , status_code : %s ",down_link, status_code)
         else:
-            print("链接有误: %s ，status_code ：%s", down_link, status_code)
+            logger.info("链接有误: %s ，status_code ：%s", down_link, status_code)
     except Exception as e:
-        print("无法链接 ：%s , exception : %s",down_link, e)
+        logger.info("无法链接 ：%s , exception : %s",down_link, e)
     finally:
         return webPage
 
@@ -211,10 +232,12 @@ def getImg(cHref,dirName,cU,idx):
     html = getHtml(cHref)
     nextFlag = True #是否有下一页
     # 正则获取图片地址
-    reg = r'SRC=\'(.+?\.jpg)\''
+    reg = r'SRC=\'(.+?)\''
+    #正则表达式 不区分大小写
+    # imgre = re.compile(reg,flags=re.IGNORECASE)
     imgre = re.compile(reg)
     imglist = imgre.findall(html.text)
-    # print(imglist)    
+    # logger.info(imglist)    
     imgurl = imglist[0];
     imgurl = imgurl.split("+")[-1][1:]  #针对动态JS拼接的URL 做处理
     # 下载图片
@@ -238,13 +261,13 @@ def make_archive(cTitle):
     comicDir = os.path.join(D_PATH,cTitle,".")
     shutil.make_archive(comicDir,'zip',comicDir)
     shutil.rmtree(comicDir)
-    print("zip file success !")    
+    logger.info("zip file success !")    
     
 def unpack_archive(cTitle):
     zipfilename = os.path.join(D_PATH,cTitle+'.zip')
-    print(zipfilename)
+    logger.info(zipfilename)
     flag = os.path.exists(zipfilename)
-    print(flag)
+    logger.info(flag)
     if flag :
         shutil.unpack_archive(zipfilename,os.path.join(D_PATH,'.'+cTitle))
     return flag
@@ -272,5 +295,5 @@ if __name__ == '__main__':
         PAGE_MAX = comic_info["page_max"]
         html = getHtml(targetUrl)
         getComic(html)
-    print("ALL END!!!")
+    logger.info("ALL END!!!")
 
